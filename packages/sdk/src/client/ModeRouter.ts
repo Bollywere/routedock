@@ -101,7 +101,10 @@ export function assertEndpointActive(
 
 /**
  * Validate semantic constraints for manifest fields beyond JSON schema syntax.
- * Enforces that all keys in `latency_hints` must be a subset of declared `regions`.
+ * Enforces:
+ * - All keys in `latency_hints` must be a subset of declared `regions`.
+ * - If `assets` is defined, it must be a non-empty array whose first entry
+ *   (`assets[0]`) matches the root-level `asset` and `asset_contract`.
  */
 export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: string): void {
   const context = baseUrl ? ` at ${baseUrl}` : ''
@@ -118,6 +121,28 @@ export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: strin
           `Invalid manifest${context}: latency_hints key '${region}' is not declared in regions (${manifest.regions.join(', ')})`,
         )
       }
+    }
+  }
+
+  if (manifest.assets !== undefined) {
+    if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+      throw new RouteDockManifestError(
+        `Invalid manifest${context}: assets must be a non-empty array when defined`,
+      )
+    }
+    for (let i = 0; i < manifest.assets.length; i++) {
+      const a = manifest.assets[i]
+      if (!a || typeof a.asset !== 'string' || typeof a.asset_contract !== 'string') {
+        throw new RouteDockManifestError(
+          `Invalid manifest${context}: assets[${i}] must define asset and asset_contract strings`,
+        )
+      }
+    }
+    const first = manifest.assets[0]!
+    if (first.asset !== manifest.asset || first.asset_contract !== manifest.asset_contract) {
+      throw new RouteDockManifestError(
+        `Invalid manifest${context}: assets[0] (${first.asset}:${first.asset_contract}) must match root asset fields (${manifest.asset}:${manifest.asset_contract})`,
+      )
     }
   }
 }

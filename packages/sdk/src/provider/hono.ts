@@ -32,6 +32,7 @@ import {
   paymentIdempotencyKey,
   type SeenTxStore,
 } from './SeenTxStore.js'
+import { selectAsset } from '../internal/assetUtils.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -51,8 +52,8 @@ export interface RouteDockHonoOptions {
     /** WebSocket transport variant of mpp-session — same channel, WS streaming */
     'mpp-session-ws'?: { rate: string; channelFactory: string }
   }
-  asset: string
-  assetContract: string
+  asset?: string
+  assetContract?: string
   payee: string
   network: Network
   payeeSecretKey: string
@@ -112,10 +113,13 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
   }
 
   const amountInBaseUnits = String(usdcToUnits(x402Price))
+  const assetContract = opts.manifest.assets && opts.manifest.assets.length > 0
+    ? selectAsset(opts.manifest, 'x402').asset_contract
+    : (opts.assetContract ?? selectAsset(opts.manifest, 'x402').asset_contract)
   const requirements = {
     scheme: 'exact' as const,
     network: caip2,
-    asset: opts.assetContract,
+    asset: assetContract,
     amount: amountInBaseUnits,
     payTo: resolvePayee(opts.manifest, 'x402'),
     maxTimeoutSeconds: 60,
@@ -248,13 +252,16 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
   const chargePrice = opts.pricing['mpp-charge']!
   const recipient = resolvePayee(opts.manifest, 'mpp-charge')
   const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
+  const assetContract = opts.manifest.assets && opts.manifest.assets.length > 0
+    ? selectAsset(opts.manifest, 'mpp-charge').asset_contract
+    : (opts.assetContract ?? selectAsset(opts.manifest, 'mpp-charge').asset_contract)
 
   const mppx = Mppx.create({
     secretKey: opts.payeeSecretKey,
     methods: [
       mppCharge({
         recipient,
-        currency: opts.assetContract,
+        currency: assetContract,
         network: networkId,
         feePayer: { envelopeSigner: opts.payeeSecretKey },
       }),
@@ -320,7 +327,7 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
 
       const result = await handler({
         amount: chargePrice,
-        currency: opts.assetContract,
+        currency: assetContract,
         recipient,
         description: opts.manifest.name,
       })(c.req.raw)

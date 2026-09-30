@@ -6,6 +6,7 @@ import type { RouteDockManifest, PaymentMode } from '../types.js'
 import { signManifest } from '../manifest/sign.js'
 import type { SeenTxStore } from './SeenTxStore.js'
 import type { OrphanedSessionInfo } from './MppSessionHandler.js'
+import { selectAsset } from '../internal/assetUtils.js'
 
 export interface RouteDockMiddlewareOptions {
   modes: PaymentMode[]
@@ -14,9 +15,9 @@ export interface RouteDockMiddlewareOptions {
     'mpp-charge'?: string
     'mpp-session'?: { rate: string; channelFactory: string }
   }
-  asset: string
+  asset?: string
   /** Stellar Asset Contract address for the payment asset */
-  assetContract: string
+  assetContract?: string
   payee: string
   network: 'testnet' | 'mainnet'
   /** Private key (S...) of the server/payee account */
@@ -88,13 +89,16 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
   if (opts.modes.includes('x402')) {
     const x402Price = opts.pricing.x402
     if (x402Price) {
+      const assetContract = opts.manifest.assets && opts.manifest.assets.length > 0
+        ? selectAsset(opts.manifest, 'x402').asset_contract
+        : (opts.assetContract ?? selectAsset(opts.manifest, 'x402').asset_contract)
       handlerMap.set(
         'x402',
         createX402Handler({
           payeeSecretKey: opts.payeeSecretKey,
           network: opts.network,
           amount: x402Price,
-          assetContract: opts.assetContract,
+          assetContract,
           ...(opts.facilitatorApiKey ? { facilitatorApiKey: opts.facilitatorApiKey } : {}),
           manifest: signedManifest,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),
@@ -108,13 +112,16 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
   if (opts.modes.includes('mpp-charge')) {
     const chargePrice = opts.pricing['mpp-charge']
     if (chargePrice) {
+      const assetContract = opts.manifest.assets && opts.manifest.assets.length > 0
+        ? selectAsset(opts.manifest, 'mpp-charge').asset_contract
+        : (opts.assetContract ?? selectAsset(opts.manifest, 'mpp-charge').asset_contract)
       handlerMap.set(
         'mpp-charge',
         createMppChargeHandler({
           payeeSecretKey: opts.payeeSecretKey,
           network: opts.network,
           amount: chargePrice,
-          assetContract: opts.assetContract,
+          assetContract,
           manifest: signedManifest,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),
           ...(opts.onCallbackError ? { onCallbackError: opts.onCallbackError } : {}),
@@ -130,6 +137,9 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
       if (!opts.commitmentPublicKey) {
         throw new Error('routedock: mpp-session mode requires commitmentPublicKey')
       }
+      const assetContract = opts.manifest.assets && opts.manifest.assets.length > 0
+        ? selectAsset(opts.manifest, 'mpp-session').asset_contract
+        : (opts.assetContract ?? selectAsset(opts.manifest, 'mpp-session').asset_contract)
       handlerMap.set(
         'mpp-session',
         createMppSessionHandler({
@@ -137,7 +147,7 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
           network: opts.network,
           channelFactory: sessionPricing.channelFactory,
           rate: sessionPricing.rate,
-          assetContract: opts.assetContract,
+          assetContract,
           manifest: signedManifest,
           commitmentPublicKey: opts.commitmentPublicKey,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),
