@@ -9,7 +9,12 @@ import { mock, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { Keypair } from '@stellar/stellar-sdk'
 import type { RouteDockManifest } from '../../types.js'
-import { RouteDockManifestError } from '../../errors.js'
+import {
+  RouteDockManifestError,
+  RouteDockSignatureError,
+  RouteDockNetworkError,
+  RouteDockFacilitatorError,
+} from '../../errors.js'
 
 // ── Scripted mppx layer ──────────────────────────────────────────────────────
 
@@ -20,6 +25,8 @@ interface MppxScript {
   fetchRejects?: boolean
   /** If true, mppx.fetch returns a 200 non-JSON response */
   fetchNonJson?: boolean
+  /** Custom error thrown by mppx.fetch */
+  fetchError?: Error
   /** If set, onProgress fires with this hash (simulating settlement) */
   paidHash?: string
   /** If true, onProgress fires with a paid event */
@@ -32,6 +39,9 @@ let capturedOnProgress: ((event: { type: string; hash?: string }) => void) | und
 
 const fakeMppx = {
   fetch: async (): Promise<Response> => {
+    if (mppxScript.fetchError) {
+      throw mppxScript.fetchError
+    }
     if (mppxScript.fetchRejects) {
       throw new TypeError('fetch failed')
     }
@@ -160,8 +170,45 @@ describe('MppChargeClient — network errors', () => {
     const client = new MppChargeClient(Keypair.random(), 'testnet')
     await assert.rejects(
       () => client.pay('https://provider.test/price', buildManifest()),
-      (err: unknown) => err instanceof Error && /MPP charge request/i.test(err.message),
+      (err: unknown) => {
+        assert.ok(err instanceof RouteDockNetworkError)
+        assert.equal(err.code, 'NETWORK')
+        assert.equal(err.retryable, true)
+        assert.ok(/MPP charge request/i.test(err.message))
+        return true
+      },
     )
+  })
+
+  it('wraps plain error as RouteDockSignatureError (retryable === false) and does not retry', async () => {
+    let callCount = 0
+    const signingError = new Error('bad challenge')
+    const originalFetch = fakeMppx.fetch
+    fakeMppx.fetch = async () => {
+      callCount++
+      throw signingError
+    }
+    try {
+      const client = new MppChargeClient(Keypair.random(), 'testnet', {
+        maxAttempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 5,
+      })
+      await assert.rejects(
+        () => client.pay('https://provider.test/price', buildManifest()),
+        (err: unknown) => {
+          assert.ok(err instanceof RouteDockSignatureError)
+          assert.equal(err.retryable, false)
+          assert.equal(err.code, 'SIGNATURE')
+          assert.equal(err.cause, signingError)
+          assert.ok(err.message.includes('MPP charge request: Error: bad challenge'))
+          return true
+        },
+      )
+      assert.equal(callCount, 1, 'mppx.fetch must be called exactly once (no retries)')
+    } finally {
+      fakeMppx.fetch = originalFetch
+    }
   })
 })
 
