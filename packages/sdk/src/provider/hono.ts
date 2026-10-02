@@ -30,6 +30,7 @@ import { base64ToUtf8, hexToBytes } from './encoding.js'
 import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
+  checkSettlementReplay,
   type SeenTxStore,
 } from './SeenTxStore.js'
 
@@ -154,12 +155,25 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
 
       // Idempotency: a retry of an already-settled payment replays the cached
       // settlement response instead of settling (and billing) a second time.
-      const idempotencyKey = await paymentIdempotencyKey((name) => c.req.header(name))
+      // The key is scoped to this route so a payment settled elsewhere can
+      // never replay here, and replays are capped + time-bounded.
+      const idempotencyKey = await paymentIdempotencyKey(
+        (name) => c.req.header(name),
+        {
+          method: c.req.method,
+          path: c.req.path,
+          amount: requirements.amount,
+          payTo: requirements.payTo,
+        },
+      )
       if (idempotencyKey) {
-        const cached = await seenTxStore.get(idempotencyKey)
-        if (cached) {
-          if (cached.headers) {
-            for (const [k, val] of Object.entries(cached.headers)) {
+        const replayCheck = await checkSettlementReplay(seenTxStore, idempotencyKey)
+        if (replayCheck.kind === 'spent') {
+          return c.json({ error: 'Payment already used' }, 402)
+        }
+        if (replayCheck.kind === 'replay') {
+          if (replayCheck.record.headers) {
+            for (const [k, val] of Object.entries(replayCheck.record.headers)) {
               c.header(k, val)
             }
           }
@@ -225,7 +239,7 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
       if (idempotencyKey) {
         const headers: Record<string, string> = {}
         if (paymentResponseHeader) headers['X-Payment-Response'] = paymentResponseHeader
-        await seenTxStore.set(idempotencyKey, { txHash, headers })
+        await seenTxStore.set(idempotencyKey, { txHash, headers, createdAt: Date.now() })
       }
 
       if (txHash && opts.onSettled) {
@@ -288,13 +302,25 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
       }
 
       // Idempotency: a retry of an already-settled charge replays the cached
-      // receipt headers instead of settling (and billing) a second time.
-       const idempotencyKey = await paymentIdempotencyKey((name) => c.req.header(name))
+      // receipt headers instead of settling (and billing) a second time. The
+      // key is scoped to this route and replays are capped + time-bounded.
+      const idempotencyKey = await paymentIdempotencyKey(
+        (name) => c.req.header(name),
+        {
+          method: c.req.method,
+          path: c.req.path,
+          amount: chargePrice,
+          payTo: recipient,
+        },
+      )
       if (idempotencyKey) {
-        const cached = await seenTxStore.get(idempotencyKey)
-        if (cached) {
-          if (cached.headers) {
-            for (const [k, val] of Object.entries(cached.headers)) {
+        const replayCheck = await checkSettlementReplay(seenTxStore, idempotencyKey)
+        if (replayCheck.kind === 'spent') {
+          return c.json({ error: 'Payment already used' }, 402)
+        }
+        if (replayCheck.kind === 'replay') {
+          if (replayCheck.record.headers) {
+            for (const [k, val] of Object.entries(replayCheck.record.headers)) {
               c.header(k, val)
             }
           }
@@ -355,6 +381,7 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
         await seenTxStore.set(idempotencyKey, {
           txHash: reference ?? null,
           headers: receiptHeaders,
+          createdAt: Date.now(),
         })
       }
 
