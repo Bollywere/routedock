@@ -240,7 +240,9 @@ Every provider serves `/.well-known/routedock.json`. The SDK fetches and validat
 }
 ```
 
-Manifests support optional multi-asset scoping via `assets` while preserving root `asset` / `asset_contract` for backward compatibility. See [Multi-Asset Support](docs/MULTI_ASSET_SUPPORT.md) for full details on asset normalization, mode-scoped selection, and client preflight.
+Manifests support optional multi-asset scoping via `assets` while preserving root `asset` / `asset_contract` for backward compatibility. See [Multi-Asset Support](docs/MULTI_ASSET_SUPPORT.md) for full details on asset normalization, endpoint-aware selection, and client preflight.
+
+> **Compatibility Notice:** Because the manifest schema uses `additionalProperties: false`, clients older than the multi-asset release will reject manifests containing the new `assets` field. Providers must not emit `assets` until clients have upgraded.
 
 The Supabase `providers` table indexes manifests with `pg_trgm` trigram search — agents query by capability, not by URL.
 

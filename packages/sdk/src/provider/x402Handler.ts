@@ -11,9 +11,11 @@ import {
 } from '@x402/core/http'
 import type { Network as X402Network } from '@x402/core/types'
 import type { RouteDockManifest } from '../types.js'
+import { RouteDockManifestError } from '../errors.js'
 import { resolvePayee } from './payee.js'
 import { usdcToUnits } from '../internal/usdc.js'
 import { extractPayerAddress } from './payer.js'
+import { resolveAssetContract } from '../internal/assetUtils.js'
 import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
@@ -33,7 +35,7 @@ export interface X402HandlerOptions {
   payeeSecretKey: string
   network: Network
   amount: string
-  assetContract: string
+  assetContract?: string
   facilitatorApiKey?: string
   manifest: RouteDockManifest
   onSettled?: (txHash: string, amount: string, mode: string, payer: string | null) => Promise<void>
@@ -76,21 +78,29 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
 
   const amountInBaseUnits = String(usdcToUnits(opts.amount))
   const payTo = resolvePayee(opts.manifest, 'x402')
-  const requirements = {
-    scheme: 'exact' as const,
-    network: caip2,
-    asset: opts.assetContract,
-    amount: amountInBaseUnits,
-    payTo,
-    maxTimeoutSeconds: 60,
-    extra: {
-      areFeesSponsored: true,
-      ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
-    },
-  }
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const endpoint = req.path || req.originalUrl
+      const assetContract = resolveAssetContract(
+        opts.manifest,
+        'x402',
+        endpoint,
+        opts.assetContract,
+      )
+      const requirements = {
+        scheme: 'exact' as const,
+        network: caip2,
+        asset: assetContract,
+        amount: amountInBaseUnits,
+        payTo,
+        maxTimeoutSeconds: 60,
+        extra: {
+          areFeesSponsored: true,
+          ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
+        },
+      }
+
       const paymentHeader = (req.headers['payment-signature'] ?? req.headers['x-payment']) as string | undefined
 
       if (!paymentHeader) {
@@ -223,6 +233,10 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
 
       next()
     } catch (err) {
+      if (err instanceof RouteDockManifestError) {
+        next(err)
+        return
+      }
       console.error('[x402] Settlement error:', err)
       res.status(500).json({ error: 'Payment settlement failed' })
     }

@@ -9,7 +9,7 @@ import { RouteDockManifestError, RouteDockPolicyRejectError, RouteDockTrustlineE
 import type { RetryPolicy } from '../internal/retry.js'
 import { usdcToStroops } from '../internal/usdc.js'
 import { InMemorySpendStore, type DailySpend, type SpendStore } from '../store/SpendStore.js'
-import { getEligibleAssets } from '../internal/assetUtils.js'
+import { selectAsset } from '../internal/assetUtils.js'
 
 // Commitment secrets are stored here instead of on the instance so they never
 // appear in JSON.stringify, structured-clone, or console.log object dumps.
@@ -266,7 +266,7 @@ export class RouteDockClient {
   ): Promise<PreflightResult> {
     assertManifestValid(manifest)
     const selectedAsset = mode
-      ? (getEligibleAssets(manifest, mode, endpoint)[0]?.asset ?? manifest.asset)
+      ? selectAsset(manifest, mode, endpoint).asset
       : manifest.asset
     await this._checkTrustline(manifest, selectedAsset)
     return {
@@ -344,8 +344,7 @@ export class RouteDockClient {
     assertEndpointActive(manifest, url, this.logger)
     const mode = selectMode(manifest, { ...options, ...(this.logger && { logger: this.logger }) })
 
-    const eligible = getEligibleAssets(manifest, mode, url)
-    const selectedAsset = eligible[0]?.asset ?? manifest.asset
+    const selectedAsset = selectAsset(manifest, mode, url).asset
 
     await this._checkTrustline(manifest, selectedAsset)
 
@@ -448,8 +447,7 @@ export class RouteDockClient {
         throw new RouteDockManifestError(`Unknown payment mode: ${mode as string}`)
     }
 
-    const eligible = getEligibleAssets(manifest, mode, url)
-    const selectedAsset = eligible[0]?.asset ?? manifest.asset
+    const selectedAsset = selectAsset(manifest, mode, url).asset
 
     return {
       amount,

@@ -4,7 +4,7 @@ import { Validator, type Schema } from '@cfworker/json-schema'
 import { assertManifestValid } from '../ModeRouter.js'
 import { RouteDockManifestError } from '../../errors.js'
 import type { RouteDockManifest } from '../../types.js'
-import schema from '../../schemas/routedock.schema.json' assert { type: 'json' }
+import schema from '../../schemas/routedock.schema.json' with { type: 'json' }
 
 const validator = new Validator(schema as unknown as Schema, '7')
 

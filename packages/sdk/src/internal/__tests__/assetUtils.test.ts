@@ -5,6 +5,7 @@ import {
   getEligibleAssets,
   selectAsset,
   isAssetEligible,
+  resolveAssetContract,
 } from '../assetUtils.js'
 import { RouteDockManifestError } from '../../errors.js'
 import type { RouteDockManifest } from '../../types.js'
@@ -194,5 +195,29 @@ describe('isAssetEligible', () => {
     )
     assert.equal(isAssetEligible(multiAssetManifest, 'USDC', 'mpp-charge'), false)
     assert.equal(isAssetEligible(multiAssetManifest, 'UNKNOWN', 'mpp-charge'), false)
+  })
+})
+
+describe('resolveAssetContract', () => {
+  it('resolves contract by mode and endpoint in multi-asset manifest', () => {
+    assert.equal(
+      resolveAssetContract(multiAssetManifest, 'x402', '/price'),
+      'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA',
+    )
+    assert.equal(
+      resolveAssetContract(multiAssetManifest, 'mpp-charge', '/quote'),
+      'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+    )
+  })
+
+  it('falls back to root asset_contract or explicitContract for legacy manifest', () => {
+    assert.equal(
+      resolveAssetContract(legacyManifest, 'x402', '/price'),
+      'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA',
+    )
+    assert.equal(
+      resolveAssetContract(legacyManifest, 'x402', '/price', 'CUSTOM_OVERRIDE_CONTRACT'),
+      'CUSTOM_OVERRIDE_CONTRACT',
+    )
   })
 })

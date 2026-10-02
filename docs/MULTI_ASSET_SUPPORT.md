@@ -35,6 +35,9 @@ To preserve 100% backward compatibility for existing clients and tooling:
 - An optional `assets` array is added: `assets?: AssetConfig[]`.
 - `assets[0]` serves as the canonical primary asset and **must strictly match** the root `asset` and `asset_contract`.
 
+> [!WARNING] Compatibility Warning
+> The RouteDock manifest schema uses `additionalProperties: false`. Clients older than the multi-asset release will reject manifests containing the new `assets` field during schema validation. Providers **MUST NOT** start emitting `assets` in their production manifests until their client base has upgraded to a compatible SDK version.
+
 ```json
 {
   "routedock": "1.0",
@@ -113,6 +116,7 @@ import {
   normalizeManifestAssets,
   getEligibleAssets,
   selectAsset,
+  resolveAssetContract,
   isAssetEligible,
 } from '@routedock/routedock'
 ```
@@ -126,36 +130,39 @@ Filters assets for a given payment mode and optional endpoint (matched by endpoi
 ### `selectAsset(manifest, mode, endpoint?)`
 Returns the first matching `AssetConfig` for the specified mode and endpoint. Throws `RouteDockManifestError` if no eligible assets exist.
 
+### `resolveAssetContract(manifest, mode, endpoint?, explicitContract?)`
+Resolves the contract address for a given mode and endpoint. Uses `selectAsset` when `assets` is defined; falls back to `explicitContract` or the root `asset_contract`.
+
 ### `isAssetEligible(manifest, assetIdentifier, mode, endpoint?)`
 Checks whether a given asset ticker or contract address is accepted for the specified mode and endpoint.
 
 ---
 
-## 5. Mode → Asset Selection in Provider Adapters
+## 5. Mode & Endpoint Asset Selection in Provider Adapters
 
-All three provider adapters automatically resolve the correct asset contract per mode using `selectAsset(manifest, mode).asset_contract`:
+All three provider adapters resolve the correct asset contract dynamically at request/handler execution time based on the active payment mode and request path:
 
 - **Express (`routedock`)**:
-  `x402`, `mpp-charge`, and `mpp-session` handlers each receive the asset contract scoped to their payment mode.
+  `x402`, `mpp-charge`, and `mpp-session` handlers resolve the asset contract per request using the incoming request path. Different endpoints can charge different assets under the same payment mode (e.g. USDC for `/infer` and XLM for `/lookup` under `x402`).
 - **Fastify (`routedockFastify`)**:
-  Same per-mode asset resolution with automatic Fastify reply hijacking for challenge/settlement.
+  Per-request endpoint-aware asset resolution with automatic Fastify reply hijacking for challenge and settlement.
 - **Hono (`routedockHono`)**:
-  Cloudflare Workers and edge runtimes route each mode to its corresponding asset contract.
+  Cloudflare Workers and edge runtimes resolve the contract at request time using `c.req.path`.
 
-In all adapters, `asset` and `assetContract` middleware options are now optional when `manifest` is provided.
+In all adapters, `asset` and `assetContract` middleware options are optional when `manifest` is provided.
 
 ---
 
-## 6. Client Trustline Preflight
+## 6. Client Trustline Preflight & Fail-Closed Asset Selection
 
 `RouteDockClient` avoids blindly assuming the root asset:
 
 - **`client.preflight(manifest, mode?, endpoint?)`**:
-  Selects the eligible asset for `mode` and runs the trustline preflight against that asset. Native assets like `XLM` are verified against the account's native balance.
+  Selects the eligible asset for `mode` and `endpoint` and runs the trustline preflight against that asset. Native assets like `XLM` are verified against the account's native balance. If no asset is eligible for the specified mode/endpoint, `preflight()` throws a `RouteDockManifestError` rather than silently falling back to the root asset.
 - **`client.pay(url, options?)`**:
-  Resolves mode, determines the mode-scoped eligible asset, verifies the trustline for that asset, and executes payment.
+  Resolves mode and endpoint, selects the eligible asset via `selectAsset(manifest, mode, url)`, verifies the trustline, and executes payment. Throws `RouteDockManifestError` if no eligible asset is configured.
 - **`client.estimateCost(url, options?)`**:
-  Returns `asset` matching the selected eligible asset for the chosen payment mode.
+  Returns `asset` matching the selected eligible asset for the chosen payment mode and endpoint, failing closed if none match.
 
 ---
 

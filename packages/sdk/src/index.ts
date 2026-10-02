@@ -9,6 +9,7 @@ export {
   getEligibleAssets,
   selectAsset,
   isAssetEligible,
+  resolveAssetContract,
 } from './internal/assetUtils.js'
 export * from './client/RouteDockClient.js'
 export * from './client/ModeRouter.js'

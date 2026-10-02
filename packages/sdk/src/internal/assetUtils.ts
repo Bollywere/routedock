@@ -43,7 +43,8 @@ export function getEligibleAssets(
 
     // Check endpoint eligibility
     if (endpoint && asset.endpoints && asset.endpoints.length > 0) {
-      if (asset.endpoints.includes(endpoint)) {
+      const trimmedEndpoint = endpoint.replace(/^\//, '')
+      if (asset.endpoints.includes(endpoint) || asset.endpoints.includes(trimmedEndpoint)) {
         return true
       }
 
@@ -57,13 +58,22 @@ export function getEligibleAssets(
             // invalid URL, keep endpoint as is
           }
         }
+        const trimmedPathname = pathname.replace(/^\//, '')
 
         // Check if any matching endpoint descriptor matches
         const matchesEndpoint = Object.entries(manifest.endpoints).some(([key, desc]) => {
-          const pathMatches = desc.path === pathname || desc.path === endpoint
-          const keyMatches = key === endpoint
+          const pathMatches =
+            desc.path === pathname ||
+            desc.path === endpoint ||
+            desc.path.replace(/\/+$/, '') === pathname.replace(/\/+$/, '') ||
+            desc.path.replace(/^\//, '') === trimmedPathname
+          const keyMatches = key === endpoint || key === trimmedEndpoint
           if (pathMatches || keyMatches) {
-            return asset.endpoints!.includes(key) || asset.endpoints!.includes(desc.path)
+            return (
+              asset.endpoints!.includes(key) ||
+              asset.endpoints!.includes(desc.path) ||
+              asset.endpoints!.includes(desc.path.replace(/^\//, ''))
+            )
           }
           return false
         })
@@ -78,6 +88,22 @@ export function getEligibleAssets(
 
     return true
   })
+}
+
+/**
+ * Resolves the asset contract for a mode and optional endpoint.
+ * Honors manifest.assets when defined; falls back to explicitContract or root asset_contract.
+ */
+export function resolveAssetContract(
+  manifest: RouteDockManifest,
+  mode: PaymentMode,
+  endpoint?: string,
+  explicitContract?: string,
+): string {
+  if (manifest.assets && manifest.assets.length > 0) {
+    return selectAsset(manifest, mode, endpoint).asset_contract
+  }
+  return explicitContract ?? selectAsset(manifest, mode, endpoint).asset_contract
 }
 
 /**

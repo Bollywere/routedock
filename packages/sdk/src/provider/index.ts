@@ -5,6 +5,7 @@ export {
   getEligibleAssets,
   selectAsset,
   isAssetEligible,
+  resolveAssetContract,
 } from '../internal/assetUtils.js'
 export * from './routedockMiddleware.js'
 export * from './x402Handler.js'
