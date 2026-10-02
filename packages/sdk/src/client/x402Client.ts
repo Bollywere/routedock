@@ -5,7 +5,6 @@ import {
   decodePaymentRequiredHeader,
   decodePaymentResponseHeader,
 } from '@x402/core/http'
-import type { Network as X402Network } from '@x402/core/types'
 import type { RouteDockManifest, PaymentResult } from '../types.js'
 import {
   RouteDockManifestError,
@@ -13,11 +12,13 @@ import {
   httpStatusToError,
   wrapFetchError,
 } from '../errors.js'
+import { stroopsToUsdc } from '../internal/usdc.js'
 import { withRetry, type RetryPolicy } from '../internal/retry.js'
+import { checkX402Accept, filterX402Accepts, type Caip2Network } from './challenge.js'
 
 type Network = 'testnet' | 'mainnet'
 
-const CAIP2: Record<Network, X402Network> = {
+const CAIP2: Record<Network, Caip2Network> = {
   testnet: 'stellar:testnet',
   mainnet: 'stellar:pubnet',
 }
@@ -60,6 +61,8 @@ export class X402Client {
     if (!pricing.facilitator) {
       throw new RouteDockManifestError('manifest.pricing.x402.facilitator missing')
     }
+
+    const caip2 = CAIP2[this.network]
 
     // Phase 1: unpaid probe. This can retry freely — no payment exists yet.
     const probe = await withRetry(async (): Promise<ProbeOutcome> => {
@@ -111,10 +114,27 @@ export class X402Client {
       })
     }
 
-    // Phase 2: sign exactly once per pay() call.
+    const firstAccept = paymentRequired.accepts[0]
+    if (!firstAccept) {
+      throw new RouteDockManifestError('402 response carries no payment accepts')
+    }
+
+    // Phase 2: bind the unsigned 402 to the signed manifest BEFORE signing.
+    // A mismatched challenge must never reach createPaymentPayload.
+    const allowed = filterX402Accepts(paymentRequired.accepts, manifest, caip2, pricing.amount)
+    if (allowed.length === 0) {
+      // `accepts` is non-empty here, so accepts[0] — the entry the scheme would
+      // have signed — failed its own checks. That rejection is the report.
+      throw checkX402Accept(firstAccept, manifest, caip2, pricing.amount)
+    }
+
+    // Phase 3: sign exactly once per pay() call.
     let paymentPayload
     try {
-      paymentPayload = await this.httpClient.createPaymentPayload(paymentRequired)
+      paymentPayload = await this.httpClient.createPaymentPayload({
+        ...paymentRequired,
+        accepts: allowed,
+      })
     } catch (err) {
       throw new RouteDockSignatureError(`x402 payment signing failed: ${String(err)}`, {
         cause: err,
@@ -122,8 +142,9 @@ export class X402Client {
     }
 
     const paymentHeaders = this.httpClient.encodePaymentSignatureHeader(paymentPayload)
+    const signedAmount = stroopsToUsdc(BigInt(paymentPayload.accepted.amount))
 
-    // Phase 3: paid request. Retries reuse the SAME paymentHeaders object, so
+    // Phase 4: paid request. Retries reuse the SAME paymentHeaders object, so
     // the provider's idempotency store can replay the cached settlement rather
     // than charging a second time.
     const settled = await withRetry(async (): Promise<Response> => {
@@ -165,6 +186,6 @@ export class X402Client {
     } catch {
       throw new RouteDockManifestError('Failed to parse JSON from settled response')
     }
-    return { data, txHash, mode: 'x402', amount: pricing.amount, timestamp: Date.now() }
+    return { data, txHash, mode: 'x402', amount: signedAmount, timestamp: Date.now() }
   }
 }

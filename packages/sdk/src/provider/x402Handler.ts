@@ -12,7 +12,7 @@ import {
 import type { Network as X402Network } from '@x402/core/types'
 import type { RouteDockManifest } from '../types.js'
 import { RouteDockManifestError } from '../errors.js'
-import { resolvePayee } from './payee.js'
+import { resolvePayee } from '../internal/payee.js'
 import { usdcToUnits } from '../internal/usdc.js'
 import { extractPayerAddress } from './payer.js'
 import { resolveAssetContract } from '../internal/assetUtils.js'
