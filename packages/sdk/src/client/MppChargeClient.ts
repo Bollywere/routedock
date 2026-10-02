@@ -22,27 +22,37 @@ export class MppChargeClient {
       throw new RouteDockManifestError('manifest.pricing.mpp-charge missing')
     }
 
-    return withRetry(async () => {
-      let txHash: string | null = null
+    let txHash: string | null = null
+    // The credential is created at most once per pay() call. Every retry after
+    // the first reuses it, so the provider's idempotency store can replay the
+    // cached settlement instead of charging a second time.
+    let credential: string | undefined
 
-      const mppx = Mppx.create({
-        polyfill: false,
-        methods: [
-          stellar.charge({
-            keypair: this.keypair,
-            mode: 'pull',
-            onProgress(event) {
-              if (event.type === 'paid') {
-                txHash = event.hash
-              }
-            },
-          }),
-        ],
-      })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [
+        stellar.charge({
+          keypair: this.keypair,
+          mode: 'pull',
+          onProgress(event) {
+            if (event.type === 'paid') {
+              txHash = event.hash
+            }
+          },
+        }),
+      ],
+      onChallenge: async (_challenge, { createCredential }) => {
+        credential ??= await createCredential()
+        return credential
+      },
+    })
 
+    return withRetry(async (): Promise<PaymentResult> => {
       let response: Response
       try {
-        response = await mppx.fetch(url)
+        response = credential
+          ? await mppx.rawFetch(url, { headers: { Authorization: credential } })
+          : await mppx.fetch(url)
       } catch (err) {
         throw wrapFetchError(err, 'MPP charge request')
       }
