@@ -319,13 +319,15 @@ describe('routedockHono — settlement idempotency', () => {
     assert.ok(cheapKey)
     await seenStore.set(cheapKey, { txHash: 'TX', createdAt: Date.now() })
 
-    const cheapRes = await app.request('/cheap', { headers: { 'payment-signature': 'SIG' } })
-    assert.equal(cheapRes.status, 200)
-    assert.equal(cheapRuns, 1)
-
+    // Request /expensive before /cheap: the reverse order hides a header-only
+    // key behind the replay cap instead of the route scope.
     const expensiveRes = await app.request('/expensive', { headers: { 'payment-signature': 'SIG' } })
     assert.notEqual(expensiveRes.status, 200)
     assert.equal(expensiveRuns, 0)
+
+    const cheapRes = await app.request('/cheap', { headers: { 'payment-signature': 'SIG' } })
+    assert.equal(cheapRes.status, 200)
+    assert.equal(cheapRuns, 1)
   })
 
   it('replays cached settlement on duplicate authorization header (mpp-charge)', async () => {

@@ -398,13 +398,15 @@ describe('routedockFastify — settlement idempotency', () => {
     const port = typeof address === 'object' && address ? address.port : 0
     const url = `http://127.0.0.1:${port}`
     try {
-      const cheapRes = await fetch(`${url}/cheap`, { headers: { 'payment-signature': 'SIG' } })
-      assert.equal(cheapRes.status, 200)
-      assert.equal(runs.cheap, 1)
-
+      // Request /expensive before /cheap: the reverse order hides a header-only
+      // key behind the replay cap instead of the route scope.
       const expensiveRes = await fetch(`${url}/expensive`, { headers: { 'payment-signature': 'SIG' } })
       assert.notEqual(expensiveRes.status, 200)
       assert.equal(runs.expensive, 0)
+
+      const cheapRes = await fetch(`${url}/cheap`, { headers: { 'payment-signature': 'SIG' } })
+      assert.equal(cheapRes.status, 200)
+      assert.equal(runs.cheap, 1)
     } finally {
       await app.close()
     }

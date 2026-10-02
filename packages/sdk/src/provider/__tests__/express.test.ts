@@ -448,13 +448,15 @@ describe('routedock (Express) — settlement idempotency', () => {
       assert.ok(cheapKey)
       await seenStore.set(cheapKey, { txHash: 'TX', createdAt: Date.now() })
 
-      const cheapRes = await fetch(`${url}/cheap`, { headers: { 'payment-signature': 'SIG' } })
-      assert.equal(cheapRes.status, 200)
-      assert.equal(runs.cheap, 1)
-
+      // Request /expensive before /cheap: the reverse order hides a header-only
+      // key behind the replay cap instead of the route scope.
       const expensiveRes = await fetch(`${url}/expensive`, { headers: { 'payment-signature': 'SIG' } })
       assert.notEqual(expensiveRes.status, 200)
       assert.equal(runs.expensive, 0)
+
+      const cheapRes = await fetch(`${url}/cheap`, { headers: { 'payment-signature': 'SIG' } })
+      assert.equal(cheapRes.status, 200)
+      assert.equal(runs.cheap, 1)
     } finally {
       await new Promise<void>((r) => server.close(() => r()))
     }
