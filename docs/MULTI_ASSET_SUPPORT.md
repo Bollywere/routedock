@@ -143,13 +143,16 @@ Checks whether a given asset ticker or contract address is accepted for the spec
 All three provider adapters resolve the correct asset contract dynamically at request/handler execution time based on the active payment mode and request path:
 
 - **Express (`routedock`)**:
-  `x402`, `mpp-charge`, and `mpp-session` handlers resolve the asset contract per request using the incoming request path. Different endpoints can charge different assets under the same payment mode (e.g. USDC for `/infer` and XLM for `/lookup` under `x402`).
+  `x402` and `mpp-charge` handlers resolve the asset contract per request using the incoming request path. Different endpoints can charge different assets under the same payment mode (e.g. USDC for `/infer` and XLM for `/lookup` under `x402`).
 - **Fastify (`routedockFastify`)**:
   Per-request endpoint-aware asset resolution with automatic Fastify reply hijacking for challenge and settlement.
 - **Hono (`routedockHono`)**:
   Cloudflare Workers and edge runtimes resolve the contract at request time using `c.req.path`.
 
 In all adapters, `asset` and `assetContract` middleware options are optional when `manifest` is provided.
+
+> [!NOTE]
+> `mpp-session` and `mpp-session-ws` always pay in the token held by the channel contract (`channelFactory`). Any `assets` entry scoped to those modes must use that same `asset_contract`, or the client will preflight a trustline the channel doesn't use.
 
 ---
 
