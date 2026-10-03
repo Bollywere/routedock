@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Keypair } from '@stellar/stellar-sdk'
+import { x402HTTPClient } from '@x402/core/client'
+import { encodePaymentRequiredHeader } from '@x402/core/http'
+import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
 import { X402Client } from '../x402Client.js'
 import type { RouteDockManifest } from '../../types.js'
 import { RouteDockFacilitatorError, RouteDockManifestError } from '../../errors.js'
@@ -24,6 +27,42 @@ const manifest: RouteDockManifest = {
   },
   endpoints: {},
   tags: ['test'],
+}
+
+const baseRequirements: PaymentRequirements = {
+  scheme: 'exact',
+  network: 'stellar:testnet',
+  asset: manifest.asset_contract,
+  amount: '10000',
+  payTo: keypair.publicKey(),
+  maxTimeoutSeconds: 60,
+  extra: { areFeesSponsored: true },
+}
+
+function paymentRequiredHeader(accepts: PaymentRequirements[] = [baseRequirements]): string {
+  return encodePaymentRequiredHeader({
+    x402Version: 2,
+    resource: { url: 'https://api.test/paid' },
+    accepts,
+  })
+}
+
+function paymentRequiredResponse(accepts?: PaymentRequirements[]): Response {
+  return new Response('payment required', {
+    status: 402,
+    headers: { 'X-Payment-Requirements': paymentRequiredHeader(accepts) },
+  })
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function makePayload(accepted: PaymentRequirements = baseRequirements): PaymentPayload {
+  return { x402Version: 2, accepted, payload: {} }
 }
 
 test('X402Client - free 200 response returns amount: "0"', async () => {
@@ -155,6 +194,138 @@ test('X402Client - missing X-Payment-Requirements header still rejects with Rout
         return true
       },
     )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+// ── #386: sign at most once per pay() ────────────────────────────────────────
+
+test('X402Client - paid request always 500: signs once, resends identical headers, exhausts retries', async (t) => {
+  const client = new X402Client(keypair.secret(), 'testnet', { baseDelayMs: 1, maxDelayMs: 5 })
+  const signCalls = t.mock.method(x402HTTPClient.prototype, 'createPaymentPayload', async () =>
+    makePayload(),
+  )
+  const paidHeaders: Array<Record<string, string>> = []
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    if (headers['PAYMENT-SIGNATURE']) {
+      paidHeaders.push(headers)
+      return new Response('bad', { status: 500 })
+    }
+    return paymentRequiredResponse()
+  }) as typeof fetch
+
+  try {
+    await assert.rejects(
+      () => client.pay('https://api.test/paid', manifest),
+      (err: unknown) => {
+        assert.ok(err instanceof RouteDockFacilitatorError)
+        assert.equal(err.status, 500)
+        return true
+      },
+    )
+    assert.equal(signCalls.mock.callCount(), 1, 'createPaymentPayload called exactly once')
+    assert.equal(paidHeaders.length, 4, 'default maxAttempts sends 4 paid requests')
+    for (const header of paidHeaders) {
+      assert.deepEqual(header, paidHeaders[0], 'every paid request carries identical headers')
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('X402Client - paid request network failure is retried without re-signing', async (t) => {
+  const client = new X402Client(keypair.secret(), 'testnet', { baseDelayMs: 1, maxDelayMs: 5 })
+  const signCalls = t.mock.method(x402HTTPClient.prototype, 'createPaymentPayload', async () =>
+    makePayload(),
+  )
+  const paidHeaders: Array<Record<string, string>> = []
+  let paidAttempts = 0
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    if (headers['PAYMENT-SIGNATURE']) {
+      paidHeaders.push(headers)
+      paidAttempts++
+      if (paidAttempts === 1) throw new TypeError('fetch failed')
+      return jsonResponse({ ok: true })
+    }
+    return paymentRequiredResponse()
+  }) as typeof fetch
+
+  try {
+    const result = await client.pay('https://api.test/paid', manifest)
+    assert.deepEqual(result.data, { ok: true })
+    assert.equal(signCalls.mock.callCount(), 1)
+    assert.equal(paidHeaders.length, 2)
+    assert.deepEqual(paidHeaders[0], paidHeaders[1])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('X402Client - unpaid probe 503 then 402 is retried, then signs once', async (t) => {
+  const client = new X402Client(keypair.secret(), 'testnet', { baseDelayMs: 1, maxDelayMs: 5 })
+  const signCalls = t.mock.method(x402HTTPClient.prototype, 'createPaymentPayload', async () =>
+    makePayload(),
+  )
+  let probeAttempts = 0
+  let paidRequests = 0
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    if (headers['PAYMENT-SIGNATURE']) {
+      paidRequests++
+      return jsonResponse({ ok: true })
+    }
+    probeAttempts++
+    if (probeAttempts === 1) return new Response('unavailable', { status: 503 })
+    return paymentRequiredResponse()
+  }) as typeof fetch
+
+  try {
+    const result = await client.pay('https://api.test/paid', manifest)
+    assert.deepEqual(result.data, { ok: true })
+    assert.equal(probeAttempts, 2)
+    assert.equal(paidRequests, 1)
+    assert.equal(signCalls.mock.callCount(), 1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('X402Client - paid retry returning 402 rejects without a second signature', async (t) => {
+  const client = new X402Client(keypair.secret(), 'testnet', { baseDelayMs: 1, maxDelayMs: 5 })
+  const signCalls = t.mock.method(x402HTTPClient.prototype, 'createPaymentPayload', async () =>
+    makePayload(),
+  )
+  let paidRequests = 0
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    if (headers['PAYMENT-SIGNATURE']) {
+      paidRequests++
+      return new Response('payment required again', { status: 402 })
+    }
+    return paymentRequiredResponse()
+  }) as typeof fetch
+
+  try {
+    await assert.rejects(
+      () => client.pay('https://api.test/paid', manifest),
+      (err: unknown) => {
+        assert.ok(err instanceof RouteDockManifestError)
+        return true
+      },
+    )
+    assert.equal(paidRequests, 1)
+    assert.equal(signCalls.mock.callCount(), 1)
   } finally {
     globalThis.fetch = originalFetch
   }
