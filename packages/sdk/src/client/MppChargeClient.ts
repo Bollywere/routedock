@@ -5,7 +5,7 @@ import type { RouteDockManifest, PaymentResult } from '../types.js'
 import {
   RouteDockManifestError,
   httpStatusToError,
-  wrapFetchError,
+  wrapMppError,
 } from '../errors.js'
 import { withRetry, type RetryPolicy } from '../internal/retry.js'
 
@@ -54,7 +54,7 @@ export class MppChargeClient {
           ? await mppx.rawFetch(url, { headers: { Authorization: credential } })
           : await mppx.fetch(url)
       } catch (err) {
-        throw wrapFetchError(err, 'MPP charge request')
+        throw wrapMppError(err, 'MPP charge request')
       }
 
       if (!response.ok) {
