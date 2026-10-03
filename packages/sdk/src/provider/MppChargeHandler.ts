@@ -10,6 +10,7 @@ import {
   paymentIdempotencyKey,
   type SeenTxStore,
 } from './SeenTxStore.js'
+import { resolveAssetContract } from '../internal/assetUtils.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -22,7 +23,7 @@ export interface MppChargeHandlerOptions {
   payeeSecretKey: string
   network: Network
   amount: string
-  assetContract: string
+  assetContract?: string
   manifest: RouteDockManifest
   /**
    * @deprecated Ignored. Charge mode opens no channel, so there is nothing for a session store to hold.
@@ -43,20 +44,36 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
   const recipient = resolvePayee(opts.manifest, 'mpp-charge')
   const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
 
-  const mppx = Mppx.create({
-    secretKey: opts.payeeSecretKey,
-    methods: [
-      stellar.charge({
-        recipient,
-        currency: opts.assetContract,
-        network: networkId,
-        feePayer: { envelopeSigner: opts.payeeSecretKey },
-      }),
-    ],
-  })
+  const mppxInstances = new Map<string, unknown>()
+  function getMppx(contract: string) {
+    let instance = mppxInstances.get(contract)
+    if (!instance) {
+      instance = Mppx.create({
+        secretKey: opts.payeeSecretKey,
+        methods: [
+          stellar.charge({
+            recipient,
+            currency: contract,
+            network: networkId,
+            feePayer: { envelopeSigner: opts.payeeSecretKey },
+          }),
+        ],
+      })
+      mppxInstances.set(contract, instance)
+    }
+    return instance
+  }
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const endpoint = req.path || req.originalUrl
+      const assetContract = resolveAssetContract(
+        opts.manifest,
+        'mpp-charge',
+        endpoint,
+        opts.assetContract,
+      )
+      const mppx = getMppx(assetContract)
       // Extract payer public key from the mppx Payment authorization header before
       // the mppx library consumes it. The Payment bearer credential JSON contains
       // a `sender` field with the payer's Stellar G... public key.
@@ -113,7 +130,7 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
       )['stellar/charge']
       const result = await handler({
         amount: amountHumanReadable,
-        currency: opts.assetContract,
+        currency: assetContract,
         recipient,
         description: opts.manifest.name,
       })(fetchReq)

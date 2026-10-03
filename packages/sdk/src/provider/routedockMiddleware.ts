@@ -14,9 +14,9 @@ export interface RouteDockMiddlewareOptions {
     'mpp-charge'?: string
     'mpp-session'?: { rate: string; channelFactory: string }
   }
-  asset: string
+  asset?: string
   /** Stellar Asset Contract address for the payment asset */
-  assetContract: string
+  assetContract?: string
   payee: string
   network: 'testnet' | 'mainnet'
   /** Private key (S...) of the server/payee account */
@@ -94,7 +94,7 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
           payeeSecretKey: opts.payeeSecretKey,
           network: opts.network,
           amount: x402Price,
-          assetContract: opts.assetContract,
+          ...(opts.assetContract ? { assetContract: opts.assetContract } : {}),
           ...(opts.facilitatorApiKey ? { facilitatorApiKey: opts.facilitatorApiKey } : {}),
           manifest: signedManifest,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),
@@ -114,7 +114,7 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
           payeeSecretKey: opts.payeeSecretKey,
           network: opts.network,
           amount: chargePrice,
-          assetContract: opts.assetContract,
+          ...(opts.assetContract ? { assetContract: opts.assetContract } : {}),
           manifest: signedManifest,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),
           ...(opts.onCallbackError ? { onCallbackError: opts.onCallbackError } : {}),
@@ -137,7 +137,7 @@ export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
           network: opts.network,
           channelFactory: sessionPricing.channelFactory,
           rate: sessionPricing.rate,
-          assetContract: opts.assetContract,
+          ...(opts.assetContract ? { assetContract: opts.assetContract } : {}),
           manifest: signedManifest,
           commitmentPublicKey: opts.commitmentPublicKey,
           ...(opts.onSettled ? { onSettled: opts.onSettled } : {}),

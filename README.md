@@ -226,6 +226,18 @@ Every provider serves `/.well-known/routedock.json`. The SDK fetches and validat
   "network": "testnet",
   "asset": "USDC",
   "asset_contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+  "assets": [
+    {
+      "asset": "USDC",
+      "asset_contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "modes": ["x402"]
+    },
+    {
+      "asset": "XLM",
+      "asset_contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "modes": ["mpp-charge"]
+    }
+  ],
   "payee": "G...",
   "pricing": {
     "x402": { "amount": "0.001", "per": "request" },
@@ -235,6 +247,10 @@ Every provider serves `/.well-known/routedock.json`. The SDK fetches and validat
   "tags": ["price", "stellar", "dex", "orderbook"]
 }
 ```
+
+Manifests support optional multi-asset scoping via `assets` while preserving root `asset` / `asset_contract` for backward compatibility. See [Multi-Asset Support](docs/MULTI_ASSET_SUPPORT.md) for full details on asset normalization, endpoint-aware selection, and client preflight.
+
+> **Compatibility Notice:** Because the manifest schema uses `additionalProperties: false`, clients older than the multi-asset release will reject manifests containing the new `assets` field. Providers must not emit `assets` until clients have upgraded.
 
 The Supabase `providers` table indexes manifests with `pg_trgm` trigram search — agents query by capability, not by URL.
 

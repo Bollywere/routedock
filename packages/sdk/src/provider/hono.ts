@@ -32,6 +32,8 @@ import {
   paymentIdempotencyKey,
   type SeenTxStore,
 } from './SeenTxStore.js'
+import { resolveAssetContract } from '../internal/assetUtils.js'
+import { RouteDockManifestError } from '../errors.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -51,8 +53,8 @@ export interface RouteDockHonoOptions {
     /** WebSocket transport variant of mpp-session — same channel, WS streaming */
     'mpp-session-ws'?: { rate: string; channelFactory: string }
   }
-  asset: string
-  assetContract: string
+  asset?: string
+  assetContract?: string
   payee: string
   network: Network
   payeeSecretKey: string
@@ -112,21 +114,29 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
   }
 
   const amountInBaseUnits = String(usdcToUnits(x402Price))
-  const requirements = {
-    scheme: 'exact' as const,
-    network: caip2,
-    asset: opts.assetContract,
-    amount: amountInBaseUnits,
-    payTo: resolvePayee(opts.manifest, 'x402'),
-    maxTimeoutSeconds: 60,
-    extra: {
-      areFeesSponsored: true,
-      ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
-    },
-  }
 
   return async (c, next) => {
     try {
+      const endpoint = c.req.path
+      const assetContract = resolveAssetContract(
+        opts.manifest,
+        'x402',
+        endpoint,
+        opts.assetContract,
+      )
+      const requirements = {
+        scheme: 'exact' as const,
+        network: caip2,
+        asset: assetContract,
+        amount: amountInBaseUnits,
+        payTo: resolvePayee(opts.manifest, 'x402'),
+        maxTimeoutSeconds: 60,
+        extra: {
+          areFeesSponsored: true,
+          ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
+        },
+      }
+
       const paymentHeader = c.req.header('payment-signature') ?? c.req.header('x-payment')
 
       if (!paymentHeader) {
@@ -237,6 +247,9 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
 
       await next()
     } catch (err) {
+      if (err instanceof RouteDockManifestError) {
+        throw err
+      }
       console.error('[x402] Settlement error:', err)
       return c.json({ error: 'Payment settlement failed' }, 500)
     }
@@ -249,20 +262,36 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
   const recipient = resolvePayee(opts.manifest, 'mpp-charge')
   const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
 
-  const mppx = Mppx.create({
-    secretKey: opts.payeeSecretKey,
-    methods: [
-      mppCharge({
-        recipient,
-        currency: opts.assetContract,
-        network: networkId,
-        feePayer: { envelopeSigner: opts.payeeSecretKey },
-      }),
-    ],
-  })
+  const mppxInstances = new Map<string, unknown>()
+  function getMppx(contract: string) {
+    let instance = mppxInstances.get(contract)
+    if (!instance) {
+      instance = Mppx.create({
+        secretKey: opts.payeeSecretKey,
+        methods: [
+          mppCharge({
+            recipient,
+            currency: contract,
+            network: networkId,
+            feePayer: { envelopeSigner: opts.payeeSecretKey },
+          }),
+        ],
+      })
+      mppxInstances.set(contract, instance)
+    }
+    return instance
+  }
 
   return async (c, next) => {
     try {
+      const endpoint = c.req.path
+      const assetContract = resolveAssetContract(
+        opts.manifest,
+        'mpp-charge',
+        endpoint,
+        opts.assetContract,
+      )
+      const mppx = getMppx(assetContract)
       // Extract payer public key from the mppx Payment authorization header.
       let payerAddress: string | null = null
       try {
@@ -320,7 +349,7 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
 
       const result = await handler({
         amount: chargePrice,
-        currency: opts.assetContract,
+        currency: assetContract,
         recipient,
         description: opts.manifest.name,
       })(c.req.raw)

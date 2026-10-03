@@ -9,6 +9,7 @@ import { RouteDockManifestError, RouteDockPolicyRejectError, RouteDockTrustlineE
 import type { RetryPolicy } from '../internal/retry.js'
 import { USDC_ISSUERS, usdcToStroops } from '../internal/usdc.js'
 import { InMemorySpendStore, type DailySpend, type SpendStore } from '../store/SpendStore.js'
+import { selectAsset } from '../internal/assetUtils.js'
 
 // Commitment secrets are stored here instead of on the instance so they never
 // appear in JSON.stringify, structured-clone, or console.log object dumps.
@@ -255,12 +256,19 @@ export class RouteDockClient {
    * call before committing to a payment — for approval gates and manual
    * trustline remediation.
    */
-  async preflight(manifest: RouteDockManifest): Promise<PreflightResult> {
+  async preflight(
+    manifest: RouteDockManifest,
+    mode?: PaymentMode,
+    endpoint?: string,
+  ): Promise<PreflightResult> {
     assertManifestValid(manifest)
-    await this._checkTrustline(manifest)
+    const selectedAsset = mode
+      ? selectAsset(manifest, mode, endpoint).asset
+      : manifest.asset
+    await this._checkTrustline(manifest, selectedAsset)
     return {
       hasTrustline: true,
-      asset: manifest.asset,
+      asset: selectedAsset,
       modes: manifest.modes,
       ...(manifest.regions && { regions: manifest.regions }),
       ...(manifest.latency_hints && { latency_hints: manifest.latency_hints }),
@@ -277,8 +285,9 @@ export class RouteDockClient {
    */
   private async _checkTrustline(
     manifest: RouteDockManifest,
+    targetAsset: string = manifest.asset,
   ): Promise<void> {
-    const cacheKey = `${this.network}:${this.keypair.publicKey()}:${manifest.asset}`
+    const cacheKey = `${this.network}:${this.keypair.publicKey()}:${targetAsset}`
     const cached = RouteDockClient._trustlineCache.get(cacheKey)
     if (cached && Date.now() < cached.expiresAt) return
 
@@ -291,20 +300,21 @@ export class RouteDockClient {
     try {
       const account = await server.loadAccount(this.keypair.publicKey())
       const balances = account.balances as unknown[]
-      const expectedIssuer = getAssetIssuer(manifest.asset, this.network)
+      const expectedIssuer = getAssetIssuer(targetAsset, this.network)
       const hasTrustline = balances.some(
         (b) =>
           typeof b === 'object' &&
           b !== null &&
-          'asset_code' in b &&
-          (b as Record<string, unknown>).asset_code === manifest.asset &&
-          (!expectedIssuer || (b as Record<string, unknown>).asset_issuer === expectedIssuer),
+          ((targetAsset === 'XLM' && (b as Record<string, unknown>).asset_type === 'native') ||
+            ('asset_code' in b &&
+              (b as Record<string, unknown>).asset_code === targetAsset &&
+              (!expectedIssuer || (b as Record<string, unknown>).asset_issuer === expectedIssuer))),
       )
       if (!hasTrustline) {
         const remediation = expectedIssuer
-          ? `Run: stellar tx new --source ${this.keypair.publicKey()} --network ${this.network} change-trust --asset ${manifest.asset}:${expectedIssuer} --limit 100000`
-          : `Establish a trustline for ${manifest.asset} with the appropriate issuer on ${this.network}`
-        throw new RouteDockTrustlineError(manifest.asset, expectedIssuer || 'unknown', remediation)
+          ? `Run: stellar tx new --source ${this.keypair.publicKey()} --network ${this.network} change-trust --asset ${targetAsset}:${expectedIssuer} --limit 100000`
+          : `Establish a trustline for ${targetAsset} with the appropriate issuer on ${this.network}`
+        throw new RouteDockTrustlineError(targetAsset, expectedIssuer || 'unknown', remediation)
       }
       RouteDockClient._trustlineCache.set(cacheKey, {
         exists: true,
@@ -313,7 +323,7 @@ export class RouteDockClient {
     } catch (err) {
       if (err instanceof RouteDockTrustlineError) throw err
       this.logger?.(
-        `[RouteDock] Trustline preflight: could not verify trustline for ${manifest.asset} — continuing`,
+        `[RouteDock] Trustline preflight: could not verify trustline for ${targetAsset} — continuing`,
       )
     }
   }
@@ -331,7 +341,9 @@ export class RouteDockClient {
     assertEndpointActive(manifest, url, this.logger)
     const mode = selectMode(manifest, { ...options, ...(this.logger && { logger: this.logger }) })
 
-    await this._checkTrustline(manifest)
+    const selectedAsset = selectAsset(manifest, mode, url).asset
+
+    await this._checkTrustline(manifest, selectedAsset)
 
     if (this.vault?.mode === 'nulth') {
       return this._payWithNulthVault(url, manifest, mode)
@@ -432,9 +444,11 @@ export class RouteDockClient {
         throw new RouteDockManifestError(`Unknown payment mode: ${mode as string}`)
     }
 
+    const selectedAsset = selectAsset(manifest, mode, url).asset
+
     return {
       amount,
-      asset: manifest.asset,
+      asset: selectedAsset,
       mode,
       manifest,
       ...(manifest.regions && { regions: manifest.regions }),

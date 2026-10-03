@@ -68,7 +68,7 @@ export interface MppSessionHandlerOptions {
   network: Network
   channelFactory: string
   rate: string
-  assetContract: string
+  assetContract?: string
   manifest: RouteDockManifest
   commitmentPublicKey: string
   onSettled?: (txHash: string, totalPaid: string, mode: string, payer: string | null) => Promise<void>
