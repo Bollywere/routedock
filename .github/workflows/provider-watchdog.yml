@@ -26,6 +26,9 @@ jobs:
       PROVIDER_A_URL: https://api-a.routedock.xyz
       PROVIDER_B_URL: https://api-b.routedock.xyz
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # No actions/checkout in this job — there is nothing to build — so gh has
+      # no git remote to infer the repository from and needs it named explicitly.
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Assert both providers serve health, a signed manifest and a 402
         run: |
