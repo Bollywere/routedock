@@ -22,6 +22,7 @@ import {
   checkSettlementReplay,
   type SeenTxStore,
 } from './SeenTxStore.js'
+import { readSettleResult } from './settleResult.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -31,20 +32,6 @@ const CAIP2: Record<Network, X402Network> = {
 }
 
 const OZ_FACILITATOR_URL = 'https://channels.openzeppelin.com/x402'
-
-/**
- * The x402 facilitator reports failures as data (`{ success: false, … }`)
- * rather than throwing. Only an explicit `success: true` carrying a non-empty
- * transaction hash counts as settled; everything else must not be recorded, be
- * reported through `onSettled`, or reach the protected route.
- */
-function settledTxHash(settleResult: unknown): string | null {
-  const result = settleResult as { success?: unknown; transaction?: unknown } | null | undefined
-  if (!result || result.success !== true) return null
-  return typeof result.transaction === 'string' && result.transaction.length > 0
-    ? result.transaction
-    : null
-}
 
 export interface X402HandlerOptions {
   payeeSecretKey: string
@@ -95,42 +82,6 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
   const payTo = resolvePayee(opts.manifest, 'x402')
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // Shared unpaid/failed-settlement response: it always carries the same
-    // payment requirements header an unpaid request would, so the agent can
-    // retry, and never an X-Payment-Response header.
-    const respondPaymentRequired = async (error: string, reason?: string): Promise<void> => {
-      const body = { error, ...(reason ? { reason } : {}) }
-      if (ozServer) {
-        const resourceInfo = {
-          url: `${req.protocol}://${req.get('host') ?? ''}${req.originalUrl}`,
-          description: opts.manifest.name,
-        }
-        const paymentRequired = await ozServer.createPaymentRequiredResponse(
-          [requirements],
-          resourceInfo,
-        )
-        res
-          .status(402)
-          .setHeader('Content-Type', 'application/json')
-          .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(paymentRequired))
-          .json(body)
-      } else {
-        const x402Response = {
-          x402Version: 2,
-          resource: {
-            url: `${req.protocol}://${req.get('host') ?? ''}${req.originalUrl}`,
-            description: opts.manifest.name,
-          },
-          accepts: [requirements],
-        }
-        res
-          .status(402)
-          .setHeader('Content-Type', 'application/json')
-          .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(x402Response))
-          .json(body)
-      }
-    }
-
     try {
       const endpoint = req.path || req.originalUrl
       const assetContract = resolveAssetContract(
@@ -150,6 +101,44 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
           areFeesSponsored: true,
           ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
         },
+      }
+
+      // Shared unpaid/failed-settlement response: it always carries the same
+      // payment requirements header an unpaid request would, so the agent can
+      // retry, and never an X-Payment-Response header. It is defined here
+      // because the requirements depend on the asset contract resolved for this
+      // request's endpoint.
+      const respondPaymentRequired = async (error: string, reason?: string): Promise<void> => {
+        const body = { error, ...(reason ? { reason } : {}) }
+        if (ozServer) {
+          const resourceInfo = {
+            url: `${req.protocol}://${req.get('host') ?? ''}${req.originalUrl}`,
+            description: opts.manifest.name,
+          }
+          const paymentRequired = await ozServer.createPaymentRequiredResponse(
+            [requirements],
+            resourceInfo,
+          )
+          res
+            .status(402)
+            .setHeader('Content-Type', 'application/json')
+            .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(paymentRequired))
+            .json(body)
+        } else {
+          const x402Response = {
+            x402Version: 2,
+            resource: {
+              url: `${req.protocol}://${req.get('host') ?? ''}${req.originalUrl}`,
+              description: opts.manifest.name,
+            },
+            accepts: [requirements],
+          }
+          res
+            .status(402)
+            .setHeader('Content-Type', 'application/json')
+            .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(x402Response))
+            .json(body)
+        }
       }
 
       const paymentHeader = (req.headers['payment-signature'] ?? req.headers['x-payment']) as string | undefined
@@ -215,15 +204,12 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
 
       if (ozServer) {
         const settleResult = await ozServer.settlePayment(payload, requirements)
-        const settledTx = settledTxHash(settleResult)
-        if (!settledTx) {
-          await respondPaymentRequired(
-            'Payment settlement failed',
-            (settleResult as { errorReason?: string } | null | undefined)?.errorReason,
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          await respondPaymentRequired('Payment settlement failed', outcome.reason)
           return
         }
-        txHash = settledTx
+        txHash = outcome.txHash
         res.setHeader(
           'X-Payment-Response',
           encodePaymentResponseHeader(
@@ -246,15 +232,12 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
           payload as Parameters<typeof localFacilitator.settle>[0],
           requirements,
         )
-        const settledTx = settledTxHash(settleResult)
-        if (!settledTx) {
-          await respondPaymentRequired(
-            'Payment settlement failed',
-            (settleResult as { errorReason?: string } | null | undefined)?.errorReason,
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          await respondPaymentRequired('Payment settlement failed', outcome.reason)
           return
         }
-        txHash = settledTx
+        txHash = outcome.txHash
         res.setHeader(
           'X-Payment-Response',
           encodePaymentResponseHeader(

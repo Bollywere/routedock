@@ -35,6 +35,7 @@ import {
 } from './SeenTxStore.js'
 import { resolveAssetContract } from '../internal/assetUtils.js'
 import { RouteDockManifestError } from '../errors.js'
+import { readSettleResult } from './settleResult.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -44,20 +45,6 @@ const CAIP2: Record<Network, X402Network> = {
 }
 
 const OZ_FACILITATOR_URL = 'https://channels.openzeppelin.com/x402'
-
-/**
- * The x402 facilitator reports failures as data (`{ success: false, … }`)
- * rather than throwing. Only an explicit `success: true` carrying a non-empty
- * transaction hash counts as settled; everything else must not be recorded, be
- * reported through `onSettled`, or reach the protected route.
- */
-function settledTxHash(settleResult: unknown): string | null {
-  const result = settleResult as { success?: unknown; transaction?: unknown } | null | undefined
-  if (!result || result.success !== true) return null
-  return typeof result.transaction === 'string' && result.transaction.length > 0
-    ? result.transaction
-    : null
-}
 
 export interface RouteDockHonoOptions {
   modes: PaymentMode[]
@@ -131,31 +118,6 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
   const amountInBaseUnits = String(usdcToUnits(x402Price))
 
   return async (c, next) => {
-    // Shared unpaid/failed-settlement response: it always carries the same
-    // payment requirements header an unpaid request would, so the agent can
-    // retry, and never an X-Payment-Response header.
-    const respondPaymentRequired = async (error: string, reason?: string) => {
-      if (ozServer) {
-        const resourceInfo = {
-          url: c.req.url,
-          description: opts.manifest.name,
-        }
-        const paymentRequired = await ozServer.createPaymentRequiredResponse(
-          [requirements],
-          resourceInfo,
-        )
-        c.header('X-Payment-Requirements', encodePaymentRequiredHeader(paymentRequired))
-      } else {
-        const x402Response = {
-          x402Version: 2,
-          resource: { url: c.req.url, description: opts.manifest.name },
-          accepts: [requirements],
-        }
-        c.header('X-Payment-Requirements', encodePaymentRequiredHeader(x402Response))
-      }
-      return c.json({ error, ...(reason ? { reason } : {}) }, 402)
-    }
-
     try {
       const endpoint = c.req.path
       const assetContract = resolveAssetContract(
@@ -175,6 +137,33 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
           areFeesSponsored: true,
           ...(useOzFacilitator ? {} : { facilitatorAddresses: [payeeKeypair.publicKey()] }),
         },
+      }
+
+      // Shared unpaid/failed-settlement response: it always carries the same
+      // payment requirements header an unpaid request would, so the agent can
+      // retry, and never an X-Payment-Response header. It is defined here
+      // because the requirements depend on the asset contract resolved for this
+      // request's endpoint.
+      const respondPaymentRequired = async (error: string, reason?: string) => {
+        if (ozServer) {
+          const resourceInfo = {
+            url: c.req.url,
+            description: opts.manifest.name,
+          }
+          const paymentRequired = await ozServer.createPaymentRequiredResponse(
+            [requirements],
+            resourceInfo,
+          )
+          c.header('X-Payment-Requirements', encodePaymentRequiredHeader(paymentRequired))
+        } else {
+          const x402Response = {
+            x402Version: 2,
+            resource: { url: c.req.url, description: opts.manifest.name },
+            accepts: [requirements],
+          }
+          c.header('X-Payment-Requirements', encodePaymentRequiredHeader(x402Response))
+        }
+        return c.json({ error, ...(reason ? { reason } : {}) }, 402)
       }
 
       const paymentHeader = c.req.header('payment-signature') ?? c.req.header('x-payment')
@@ -231,14 +220,11 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
 
       if (ozServer) {
         const settleResult = await ozServer.settlePayment(payload, requirements)
-        const settledTx = settledTxHash(settleResult)
-        if (!settledTx) {
-          return respondPaymentRequired(
-            'Payment settlement failed',
-            (settleResult as { errorReason?: string } | null | undefined)?.errorReason,
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          return respondPaymentRequired('Payment settlement failed', outcome.reason)
         }
-        txHash = settledTx
+        txHash = outcome.txHash
         paymentResponseHeader = encodePaymentResponseHeader(
           settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
         )
@@ -261,14 +247,11 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
           payload as Parameters<typeof localFacilitator.settle>[0],
           requirements,
         )
-        const settledTx = settledTxHash(settleResult)
-        if (!settledTx) {
-          return respondPaymentRequired(
-            'Payment settlement failed',
-            (settleResult as { errorReason?: string } | null | undefined)?.errorReason,
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          return respondPaymentRequired('Payment settlement failed', outcome.reason)
         }
-        txHash = settledTx
+        txHash = outcome.txHash
         paymentResponseHeader = encodePaymentResponseHeader(
           settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
         )
