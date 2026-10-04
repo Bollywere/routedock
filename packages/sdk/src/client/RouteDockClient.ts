@@ -89,7 +89,7 @@ export interface RouteDockClientConfig {
   /** Stellar keypair or raw secret key (S...) — fee payer / fallback signer */
   wallet: Keypair | string
   network: 'testnet' | 'mainnet'
-  /** Optional local daily spend cap — checked before every payment (local-key vault only) */
+  /** Optional local daily spend cap — checked before every payment, nulth vault payments included */
   spendCap?: SpendCap
   /**
    * Ed25519 secret key (S...) for signing channel commitments. Required for mpp-session.
@@ -353,10 +353,7 @@ export class RouteDockClient {
         throw new RouteDockManifestError(`Unknown payment mode: ${mode as string}`)
     }
 
-    // Reserve against the local spend cap BEFORE dispatching, on every code
-    // path including the nulth vault. The vault path used to return early,
-    // which let vault payments bypass `spendCap`/`endpointCaps` entirely and
-    // kept vault spend out of the accumulator every later pay() reads.
+    // Reserve before dispatching so no path can spend outside the cap.
     const reserveId = await this._checkAndReserveSpend(amount, baseUrl)
 
     let result: PaymentResult

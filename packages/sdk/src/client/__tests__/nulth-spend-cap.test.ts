@@ -111,20 +111,38 @@ function makeManifestHandler(manifest: RouteDockManifest) {
   }
 }
 
-function stubTrustlineCache(client: InstanceType<typeof RouteDockClient>): void {
-  const keypair = (client as any).keypair as Keypair
-  const network = (client as any).network as string
-  ;(RouteDockClient as any)._trustlineCache.set(`${network}:${keypair.publicKey()}:USDC`, {
-    exists: true,
-    expiresAt: Date.now() + 300_000,
-  })
+/**
+ * Typed views of the members these tests have to reach: the client keeps them
+ * private, and the shape is written out here so a signature change breaks the
+ * test instead of being papered over with a cast.
+ */
+type ClientInternals = {
+  keypair: Keypair
+  network: 'testnet' | 'mainnet'
+  x402: unknown
+  vault: unknown
 }
 
-function fakeResult(mode: string, amount: string): PaymentResult {
+type ClientStatics = {
+  _trustlineCache: Map<string, { exists: true; expiresAt: number }>
+}
+
+const internals = (client: InstanceType<typeof RouteDockClient>): ClientInternals =>
+  client as unknown as ClientInternals
+
+function stubTrustlineCache(client: InstanceType<typeof RouteDockClient>): void {
+  const { keypair, network } = internals(client)
+  ;(RouteDockClient as unknown as ClientStatics)._trustlineCache.set(
+    `${network}:${keypair.publicKey()}:USDC`,
+    { exists: true, expiresAt: Date.now() + 300_000 },
+  )
+}
+
+function fakeResult(mode: PaymentResult['mode'], amount: string): PaymentResult {
   return {
     data: { ok: true },
     txHash: 'deadbeef',
-    mode: mode as any,
+    mode,
     amount,
     timestamp: Date.now(),
   }
@@ -136,7 +154,7 @@ function installFakeX402(client: InstanceType<typeof RouteDockClient>): void {
     x402PayCalls++
     return fakeResult('x402', '0.001')
   }
-  ;(client as any).x402 = {
+  internals(client).x402 = {
     pay,
     withSigner: () => ({ pay }),
   }
@@ -144,7 +162,6 @@ function installFakeX402(client: InstanceType<typeof RouteDockClient>): void {
 
 function makeClient(opts: {
   spendCap: { daily: string; endpointCaps?: Record<string, string> }
-  modes?: Array<'x402' | 'mpp-charge'>
 }): InstanceType<typeof RouteDockClient> {
   return new RouteDockClient({
     wallet: Keypair.random(),
@@ -259,7 +276,7 @@ describe('RouteDockClient — nulth vault spend cap (#396)', () => {
       // Switch to the non-vault path: the remaining cap is 0.0005, so another
       // 0.001 payment must be refused. This fails if vault spend was never
       // committed to the shared accumulator.
-      ;(client as any).vault = undefined
+      internals(client).vault = undefined
       let caught: unknown
       try {
         await client.pay(`${server.url}/test`)
