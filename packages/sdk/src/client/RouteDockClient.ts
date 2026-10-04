@@ -206,7 +206,12 @@ export class RouteDockClient {
     this.spendCap = config.spendCap ? normalizeSpendCap(config.spendCap) : undefined
     this.retryPolicy = config.retryPolicy
     // Only warn about non-durability when a spend cap is actually configured.
-    this.spendStore = config.spendStore ?? new InMemorySpendStore({ warn: !!config.spendCap })
+    this.spendStore =
+      config.spendStore ??
+      new InMemorySpendStore({
+        warn: !!config.spendCap,
+        ...(config.logger && { logger: config.logger }),
+      })
     this.logger = config.logger
     this.manifestTimeoutMs = config.manifestTimeoutMs
     this.expectedPayee = config.expectedPayee

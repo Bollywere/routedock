@@ -14,7 +14,11 @@
 /** Severity of a log line. */
 export type RouteDockLogLevel = 'debug' | 'info' | 'warn' | 'error'
 
-/** Structured context attached to a log line. Must stay JSON-serializable. */
+/**
+ * Structured context attached to a log line, typically `{ error: err }`. Sinks
+ * receive the values unresolved, so a serialising sink must project non-JSON
+ * values such as `Error` itself.
+ */
 export type RouteDockLogFields = Record<string, unknown>
 
 /**

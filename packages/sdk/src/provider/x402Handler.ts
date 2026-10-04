@@ -55,8 +55,8 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
   const caip2 = CAIP2[opts.network]
   const payeeKeypair = Keypair.fromSecret(opts.payeeSecretKey)
   const signer = createEd25519Signer(opts.payeeSecretKey, caip2)
-  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
   const logger = resolveLogger(opts.logger)
+  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore({ logger })
 
   const useOzFacilitator = opts.network === 'mainnet' && opts.facilitatorApiKey
 

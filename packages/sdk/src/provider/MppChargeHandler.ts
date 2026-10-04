@@ -46,8 +46,8 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
   const networkId = MPP_NETWORK[opts.network]
   const amountHumanReadable = opts.amount
   const recipient = resolvePayee(opts.manifest, 'mpp-charge')
-  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
   const logger = resolveLogger(opts.logger)
+  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore({ logger })
 
   const mppxInstances = new Map<string, unknown>()
   function getMppx(contract: string) {

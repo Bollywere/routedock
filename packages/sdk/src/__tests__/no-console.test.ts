@@ -25,7 +25,7 @@ function listSourceFiles(dir: string): string[] {
       out.push(...listSourceFiles(full))
       continue
     }
-    if (!entry.name.endsWith('.ts')) continue
+    if (!/\.tsx?$/.test(entry.name)) continue
     if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.tsx')) continue
     out.push(full)
   }
@@ -48,7 +48,7 @@ describe('SDK logging (#286)', () => {
           if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) {
             return
           }
-          if (/\bconsole\s*\./.test(line)) {
+          if (/\bconsole\s*[.[]/.test(line)) {
             offenders.push(`${rel}:${index + 1}: ${trimmed}`)
           }
         })

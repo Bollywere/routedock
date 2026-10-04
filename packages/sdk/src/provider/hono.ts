@@ -94,8 +94,8 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
   const payeeKeypair = Keypair.fromSecret(opts.payeeSecretKey)
   const signer = createEd25519Signer(opts.payeeSecretKey, caip2)
   const x402Price = opts.pricing.x402!
-  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
   const logger = resolveLogger(opts.logger)
+  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore({ logger })
 
   const useOzFacilitator = opts.network === 'mainnet' && opts.facilitatorApiKey
 
@@ -278,8 +278,8 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
   const networkId = CAIP2[opts.network] as 'stellar:testnet' | 'stellar:pubnet'
   const chargePrice = opts.pricing['mpp-charge']!
   const recipient = resolvePayee(opts.manifest, 'mpp-charge')
-  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
   const logger = resolveLogger(opts.logger)
+  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore({ logger })
 
   const mppxInstances = new Map<string, unknown>()
   function getMppx(contract: string) {
