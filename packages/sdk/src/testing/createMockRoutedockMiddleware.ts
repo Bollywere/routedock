@@ -71,8 +71,12 @@ export interface MockSettlementRecord {
 
 const DEFAULT_TX_HASH = '0000000000000000000000000000000000000000000000000000000000000000'
 const DEFAULT_CHANNEL_ID = 'CCK4XOW3YKQUEZFONUTINKMSNW7SNMRQZURME5U3UP7E6WNGK7UHUCAH'
-/** A valid Ed25519 public key — production only ever sends a G... string or null. */
-const DEFAULT_PAYER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+/**
+ * A valid Ed25519 public key — production only ever sends a G... string or null.
+ * Deliberately different from any key the tests pass explicitly, so a test can
+ * tell the default apart from a caller-supplied payer.
+ */
+const DEFAULT_PAYER = 'GAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCF6M'
 
 /** Format a scaled (×1e7) BigInt as a 7-decimal string — mirrors the real handler. */
 function format7(scaled: bigint): string {
