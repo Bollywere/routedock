@@ -22,6 +22,7 @@ import {
   checkSettlementReplay,
   type SeenTxStore,
 } from './SeenTxStore.js'
+import { readSettleResult } from './settleResult.js'
 
 type Network = 'testnet' | 'mainnet'
 
@@ -102,9 +103,13 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
         },
       }
 
-      const paymentHeader = (req.headers['payment-signature'] ?? req.headers['x-payment']) as string | undefined
-
-      if (!paymentHeader) {
+      // Shared unpaid/failed-settlement response: it always carries the same
+      // payment requirements header an unpaid request would, so the agent can
+      // retry, and never an X-Payment-Response header. It is defined here
+      // because the requirements depend on the asset contract resolved for this
+      // request's endpoint.
+      const respondPaymentRequired = async (error: string, reason?: string): Promise<void> => {
+        const body = { error, ...(reason ? { reason } : {}) }
         if (ozServer) {
           const resourceInfo = {
             url: `${req.protocol}://${req.get('host') ?? ''}${req.originalUrl}`,
@@ -118,7 +123,7 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
             .status(402)
             .setHeader('Content-Type', 'application/json')
             .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(paymentRequired))
-            .json({ error: 'Payment Required' })
+            .json(body)
         } else {
           const x402Response = {
             x402Version: 2,
@@ -132,8 +137,14 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
             .status(402)
             .setHeader('Content-Type', 'application/json')
             .setHeader('X-Payment-Requirements', encodePaymentRequiredHeader(x402Response))
-            .json({ error: 'Payment Required' })
+            .json(body)
         }
+      }
+
+      const paymentHeader = (req.headers['payment-signature'] ?? req.headers['x-payment']) as string | undefined
+
+      if (!paymentHeader) {
+        await respondPaymentRequired('Payment Required')
         return
       }
 
@@ -193,15 +204,18 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
 
       if (ozServer) {
         const settleResult = await ozServer.settlePayment(payload, requirements)
-        txHash = (settleResult as { transaction?: string }).transaction ?? null
-        if (settleResult) {
-          res.setHeader(
-            'X-Payment-Response',
-            encodePaymentResponseHeader(
-              settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
-            ),
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          await respondPaymentRequired('Payment settlement failed', outcome.reason)
+          return
         }
+        txHash = outcome.txHash
+        res.setHeader(
+          'X-Payment-Response',
+          encodePaymentResponseHeader(
+            settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
+          ),
+        )
       } else {
         const verifyResult = await localFacilitator.verify(
           payload as Parameters<typeof localFacilitator.verify>[0],
@@ -218,15 +232,18 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
           payload as Parameters<typeof localFacilitator.settle>[0],
           requirements,
         )
-        txHash = (settleResult as { transaction?: string }).transaction ?? null
-        if (settleResult) {
-          res.setHeader(
-            'X-Payment-Response',
-            encodePaymentResponseHeader(
-              settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
-            ),
-          )
+        const outcome = readSettleResult(settleResult)
+        if (!outcome.ok) {
+          await respondPaymentRequired('Payment settlement failed', outcome.reason)
+          return
         }
+        txHash = outcome.txHash
+        res.setHeader(
+          'X-Payment-Response',
+          encodePaymentResponseHeader(
+            settleResult as Parameters<typeof encodePaymentResponseHeader>[0],
+          ),
+        )
       }
 
       // Record the settlement so a retry of this exact payment is deduped.
