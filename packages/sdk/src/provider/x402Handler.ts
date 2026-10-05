@@ -16,6 +16,7 @@ import { resolvePayee } from '../internal/payee.js'
 import { usdcToUnits } from '../internal/usdc.js'
 import { extractPayerAddress } from './payer.js'
 import { resolveAssetContract } from '../internal/assetUtils.js'
+import { resolveLogger, type RouteDockLogger } from '../internal/logger.js'
 import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
@@ -47,13 +48,16 @@ export interface X402HandlerOptions {
    * retries the same signed payment. Defaults to a per-handler in-memory store.
    */
   seenTxStore?: SeenTxStore
+  /** Log sink for internal error paths. Defaults to a console-backed logger. */
+  logger?: RouteDockLogger
 }
 
 export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
   const caip2 = CAIP2[opts.network]
   const payeeKeypair = Keypair.fromSecret(opts.payeeSecretKey)
   const signer = createEd25519Signer(opts.payeeSecretKey, caip2)
-  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore()
+  const logger = resolveLogger(opts.logger)
+  const seenTxStore = opts.seenTxStore ?? new InMemorySeenTxStore({ logger })
 
   const useOzFacilitator = opts.network === 'mainnet' && opts.facilitatorApiKey
 
@@ -258,7 +262,7 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
 
       if (txHash && opts.onSettled) {
         Promise.resolve().then(() => opts.onSettled!(txHash!, opts.amount, 'x402', payerAddress)).catch(err => {
-          console.error('[x402] onSettled callback error:', err)
+          logger('error', '[x402] onSettled callback error', { error: err })
           opts.onCallbackError?.(err, 'onSettled')
         })
       }
@@ -269,7 +273,7 @@ export function createX402Handler(opts: X402HandlerOptions): RequestHandler {
         next(err)
         return
       }
-      console.error('[x402] Settlement error:', err)
+      logger('error', '[x402] Settlement error', { error: err })
       res.status(500).json({ error: 'Payment settlement failed' })
     }
   }

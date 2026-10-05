@@ -206,7 +206,12 @@ export class RouteDockClient {
     this.spendCap = config.spendCap ? normalizeSpendCap(config.spendCap) : undefined
     this.retryPolicy = config.retryPolicy
     // Only warn about non-durability when a spend cap is actually configured.
-    this.spendStore = config.spendStore ?? new InMemorySpendStore({ warn: !!config.spendCap })
+    this.spendStore =
+      config.spendStore ??
+      new InMemorySpendStore({
+        warn: !!config.spendCap,
+        ...(config.logger && { logger: config.logger }),
+      })
     this.logger = config.logger
     this.manifestTimeoutMs = config.manifestTimeoutMs
     this.expectedPayee = config.expectedPayee
@@ -221,9 +226,12 @@ export class RouteDockClient {
     }
 
     const secretKey = this.keypair.secret()
-    this.x402 = new X402Client(secretKey, this.network, this.retryPolicy)
-    this.charge = new MppChargeClient(this.keypair, this.network, this.retryPolicy)
-    this.session = new MppSessionClient(this.keypair, this.network, this.retryPolicy)
+    // Carry the client's logger into retry diagnostics so a consumer that
+    // silences the SDK silences the retry path too.
+    const retryPolicy = this.logger ? { ...this.retryPolicy, logger: this.logger } : this.retryPolicy
+    this.x402 = new X402Client(secretKey, this.network, retryPolicy)
+    this.charge = new MppChargeClient(this.keypair, this.network, retryPolicy)
+    this.session = new MppSessionClient(this.keypair, this.network, retryPolicy, undefined, this.logger)
   }
 
   /** Fetch manifest and select mode — shared by pay() and estimateCost(). */
@@ -323,6 +331,7 @@ export class RouteDockClient {
     } catch (err) {
       if (err instanceof RouteDockTrustlineError) throw err
       this.logger?.(
+        'warn',
         `[RouteDock] Trustline preflight: could not verify trustline for ${targetAsset} — continuing`,
       )
     }
