@@ -1,5 +1,16 @@
 # @routedock/routedock
 
+## 0.3.1
+
+### Patch Changes
+
+- [#546](https://github.com/winsznx/routedock/pull/546) [`cd645d5`](https://github.com/winsznx/routedock/commit/cd645d564d95cb836288ad62b03df4d58143c1bf) Thanks [@anifast-123](https://github.com/anifast-123)! - Fix `paymentContextFromManifest` in both the SDK and `@routedock/nulth-sdk` ignoring a per-mode payee override. Both helpers always returned the top-level `manifest.payee`, while providers pay out to `resolvePayee(manifest, mode)` (`pricing.<mode>.payee ?? manifest.payee`). For any manifest using treasury separation the Nulth allowlist therefore checked an address that never received the payment: an agent allowlisting the real recipient was rejected with `payee_not_allowed`, while one allowlisting only the top-level payee got a signature for funds sent elsewhere. Each helper's parameter type now accepts an optional `payee` and returns `pricing.payee ?? manifest.payee`, mirroring `resolvePayee`.
+
+- [#483](https://github.com/winsznx/routedock/pull/483) [`4a324a9`](https://github.com/winsznx/routedock/commit/4a324a975d426053f45220459ad36158fc96a602) Thanks [@anifast-123](https://github.com/anifast-123)! - The Nulth vault path now parses the daily cap and manifest prices with the validated `usdcToStroops`, so negative, empty and over-precise amounts throw `RangeError` instead of being accepted or truncated.
+
+- Updated dependencies [[`cd645d5`](https://github.com/winsznx/routedock/commit/cd645d564d95cb836288ad62b03df4d58143c1bf)]:
+  - @routedock/nulth-sdk@0.2.2
+
 ## 0.3.0
 
 ### Minor Changes
